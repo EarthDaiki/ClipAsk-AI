@@ -11,10 +11,12 @@ document.addEventListener("DOMContentLoaded", async () => {
         "summaryCount",
     ]);
 
+    let models = [];
+
     if (result.openaiApiKey) {
         document.getElementById("apiKey").value = result.openaiApiKey;
         document.getElementById("settingContainer").hidden = false;
-        await setModel(result.openaiApiKey);
+        models = await setModel(result.openaiApiKey);
         handleAdvancedMenuBtn();
     } else {
         createContinueBtn();
@@ -25,15 +27,37 @@ document.addEventListener("DOMContentLoaded", async () => {
         document.getElementById("extraPrompt").value = result.extraPrompt;
     }
 
+    const textModel = document.getElementById("textModel");
     if (result.textModel) {
-        document.getElementById("textModel").value = result.textModel;
+        const exist = models.some(model => model.id === result.textModel);
+        if (exist) {
+            textModel.value = result.textModel;
+        } else {
+            textModel.value = "";
+        }
+    } else {
+        textModel.value = "";
     }
+
+    const imageModel = document.getElementById("imageModel");
     if (result.imageModel) {
-        document.getElementById("imageModel").value = result.imageModel;
+        const exist = models.some(model => model.id === result.imageModel);
+        if (exist) {
+            imageModel.value = result.imageModel;
+        }
+    } else {
+        imageModel.value = "";
     }
+
+    const summaryModel = document.getElementById("summaryModel");
     if (result.summaryModel) {
-        document.getElementById("summaryModel").value = result.summaryModel;
-    } 
+        const exist = models.some(model => model.id === result.summaryModel);
+        if (exist) {
+            summaryModel.value = result.summaryModel;
+        }
+    } else {
+        summaryModel.value = "";
+    }
 
     if (result.maxOutputTokens) {
         document.getElementById("maxOutputTokens").value = result.maxOutputTokens;
@@ -130,11 +154,14 @@ function handleApiKeyInput() {
 async function handleContinueClick() {
     const apiKey = document.getElementById("apiKey").value.trim();
 
-    await chrome.storage.local.set({
-        openaiApiKey: apiKey
-    });
-
-    await setModel(apiKey);
+    const models = await setModel(apiKey);
+    if (models.length > 0) {
+        await chrome.storage.local.set({
+            openaiApiKey: apiKey
+        });
+    } else {
+        setMessage("API Key is invalid.")
+    }
 }
 
 function handleChatModeRadio() {
@@ -269,77 +296,79 @@ function setMessage(text) {
 
 async function setModel(apiKey) {
     const data = await getModels(apiKey);
-    if (!data) { return; }
+    if (!data) { return []; }
 
     document.getElementById("settingContainer").hidden = false;
-    const continueBtn = document.getElementById("continueBtn");
-    if (continueBtn) {
-        continueBtn.remove();
-    }
 
-    const models = data.data.filter(model => {
-        const id = model.id;
+    const modelLabels = {
+        "gpt-6.1-sol": "Recommended",
+        "gpt-6.1-terra": "Balanced",
+        "gpt-6-luna": "Budget"
+    };
 
-        return (
-            (
-                // modern GPT chat models
-                id.startsWith("gpt-5") ||
-                id.startsWith("gpt-4.1") ||
-                id.startsWith("gpt-4o") ||
-
-                // reasoning models
-                id === "o1" ||
-                id === "o3" ||
-                id === "o4-mini" ||
-                id.startsWith("o1-") ||
-                id.startsWith("o3-") ||
-                id.startsWith("o4-mini-") ||
-
-                // web search capable models
-                id.includes("search-preview") ||
-                id.includes("search-api")
-            )
-
-            &&
-
-            !(
-                // exclude non-text variants
-                id.includes("audio") ||
-                id.includes("realtime") ||
-                id.includes("transcribe") ||
-                id.includes("tts") ||
-                id.includes("image")
-            )
+    let models = data.data.filter(model =>
+        Object.hasOwn(modelLabels, model.id)
+    );
+    if (models.length === 0) {
+        models = data.data.filter(model => 
+            /^gpt-[56](\.|-|$)/.test(model.id)
         );
-    });
+    }
 
     const textModelSelect = document.getElementById("textModel");
     const imageModelSelect = document.getElementById("imageModel");
     const summaryModelSelect = document.getElementById("summaryModel");
     const selects = [textModelSelect, imageModelSelect, summaryModelSelect];
     for (const select of selects) {
+        if (!select.value) {
+            const option = document.createElement("option");
+            option.value = "";
+            option.textContent = "Select a model";
+            option.disabled = true;
+            option.selected = true;
+            option.hidden = true;
+            select.appendChild(option);
+        }
         for (const model of models) {
+            let textContent = `${model.id}`;
+            if (modelLabels[model.id]) {
+                textContent = `${model.id} - ${modelLabels[model.id]}`;
+            }
             const option = document.createElement("option");
             option.value = model.id;
-            option.textContent = model.id;
+            option.textContent = textContent;
             select.appendChild(option);
         }
     }
+
+    if (models.length > 0) {
+        const continueBtn = document.getElementById("continueBtn");
+        if (continueBtn) {
+            continueBtn.remove();
+        }
+    }
+
+    return models;
 }
 
 async function getModels(apiKey) {
-    const res = await fetch("https://api.openai.com/v1/models", {
-        headers: {
-            Authorization: `Bearer ${apiKey}`
-        }
-    });
+    try {
+        const res = await fetch("https://api.openai.com/v1/models", {
+            headers: {
+                Authorization: `Bearer ${apiKey}`
+            }
+        });
 
-    const data = await res.json();
-    if (res.status != 200) {
-        setMessage(data.error.message);
+        const data = await res.json();
+        if (res.status != 200) {
+            setMessage(data.error.message);
+            return;
+        }
+        return data
+    } catch (error){
+        setMessage("Error: " + error.message);
         return;
     }
-    return data
 }
 
 async function getData(keys=null) {

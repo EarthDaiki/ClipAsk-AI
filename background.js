@@ -7,13 +7,13 @@ chrome.runtime.onInstalled.addListener(async () => {
     const defaults = {
         openaiApiKey: "",
         extraPrompt: "",
-        textModel: "gpt-4o-mini",
-        imageModel: "gpt-4o",
-        summaryModel: "gpt-4o-mini",
+        textModel: "",
+        imageModel: "",
+        summaryModel: "",
         maxOutputTokens: 500,
         store: false,
         summary: true,
-        summaryCount: 10,
+        summaryCount: 30,
         conversations: {},
     };
 
@@ -52,12 +52,13 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 });
 
 chrome.contextMenus.onClicked.addListener(async (info, tab) => {
-
     if (!tab?.id) return;
 
     if (!tab.url || tab.url.startsWith("chrome://")) return;
 
-    const { openaiApiKey, extraPrompt } = await getData(["openaiApiKey", "extraPrompt"]);
+    const { openaiApiKey, extraPrompt } = await getData([
+        "openaiApiKey", "extraPrompt"
+    ]);
 
     if (!openaiApiKey) {
         chrome.action.openPopup();
@@ -70,14 +71,28 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
             injectedTabs.add(tab.id);
         }
 
+        // summarize the chat if the chat count is higher than threshold.
+        const storageData = await getData();
+        const domain = getDomain(tab.url);
+        const count = storageData.conversations?.[domain]?.count ?? 0;
+        if (
+            storageData.store &&
+            storageData.summary && 
+            (count >= storageData.summaryCount)
+
+        ) {
+            // This is a box to display an ai output.
+            await executeScript({ tabId: tab.id }, createTextBox, []);
+            await executeScript({ tabId: tab.id }, loadingMessage, ["Summarizing..."]);
+            await summarizeConversation(storageData, domain);
+            await executeScript({ tabId: tab.id }, removeLoadingMessage, []);
+        }
+
         /* ---------------- TEXT ---------------- */
         if (info.menuItemId === "ask-chatgpt-text") {
-
-            await chrome.scripting.executeScript({
-                target: { tabId: tab.id },
-                func: showAnswer,
-                args: ["Loading..."]
-            });
+            // This is a box to display an ai output.
+            await executeScript({ tabId: tab.id }, createTextBox, []);
+            await executeScript({ tabId: tab.id }, loadingMessage, ["Loading..."]);
 
             const finalInput =
                 extraPrompt
@@ -91,37 +106,26 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
                     true,
                     openaiApiKey,
                     finalInput,
-                    null
+                    null,
+                    false,
+                    domain
                 );
 
-            await chrome.scripting.executeScript({
-                target: { tabId: tab.id },
-                func: showAnswer,
-                args: [answer]
-            });
-
+            if (answer != null) {
+                await executeScript({ tabId: tab.id }, removeLoadingMessage, []);
+                await executeScript({ tabId: tab.id }, showAnswer, [answer]);
+            }
             return;
         }
 
         /* ---------------- IMAGE ---------------- */
         if (info.menuItemId === "ask-chatgpt-image") {
 
-            const result =
-                await chrome.scripting.executeScript({
-                    target: { tabId: tab.id },
-                    func: startCropMode
-                });
+            const result = await executeScript({ tabId: tab.id }, startCropMode, []);
 
-            const area =
-                result?.[0]?.result;
+            const area = result?.[0]?.result;
 
             if (!area) return;
-
-            await chrome.scripting.executeScript({
-                target: { tabId: tab.id },
-                func: showAnswer,
-                args: ["Loading..."]
-            });
 
             /* 画面全体スクショ */
             const screenshot =
@@ -131,22 +135,21 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
                 );
 
             /* page側でcrop */
-            const cropResult =
-                await chrome.scripting.executeScript({
-                    target: { tabId: tab.id },
-                    func: cropImageOnPage,
-                    args: [screenshot, area]
-                });
+            const cropResult = await executeScript({ tabId: tab.id }, cropImageOnPage, [screenshot, area]);
 
             const croppedImage =
                 cropResult?.[0]?.result;
+
+            // This is a box to display an ai output.
+            await executeScript({ tabId: tab.id }, createTextBox, []);
+            await executeScript({ tabId: tab.id }, loadingMessage, ["Loading..."]);
 
             if (!croppedImage)
                 throw new Error(
                     "Crop failed"
                 );
             
-            const text =
+            const finalInput =
                 extraPrompt ||
                 "Analyze this image.";
 
@@ -154,30 +157,32 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
                 await askChatGPT(
                     false,
                     openaiApiKey,
-                    text,
-                    croppedImage
+                    finalInput,
+                    croppedImage,
+                    false,
+                    domain
                 );
 
-            await chrome.scripting.executeScript({
-                target: { tabId: tab.id },
-                func: showAnswer,
-                args: [answer]
-            });
-
+            if (answer != null) {
+                await executeScript({ tabId: tab.id }, removeLoadingMessage, []);
+                await executeScript({ tabId: tab.id }, showAnswer, [answer]);
+            }
             return;
         }
 
     } catch (e) {
-
-        await chrome.scripting.executeScript({
-            target: { tabId: tab.id },
-            func: showAnswer,
-            args: [
-                "Error: " + e.message
-            ]
-        });
+        await executeScript({ tabId: tab.id }, removeLoadingMessage, []);
+        await executeScript({ tabId: tab.id }, showAnswer, ["Error: " + e.message]);
     }
 });
+
+async function executeScript(target, func, args) {
+    return await chrome.scripting.executeScript({
+        target: target,
+        func: func,
+        args: args
+    });
+}
 
 function getDomain(currentUrl) {
     const hostname = new URL(currentUrl).hostname;
@@ -191,43 +196,45 @@ function getPreviousId(domain, conversations) {
 }
 
 // If you want to post only text, you don't need an image.
-function apiBody(isText, storageData, text, image, previousId, isSummary=false) {
-    let body = {}
+function buildApiBody(isText, storageData, text, image=null, previousId=null, isSummary=false) {
+    const body = {
+        input: text,
+        store: storageData.store,
+        max_output_tokens: storageData.maxOutputTokens
+    };
     if (isSummary) {
-        body = {
-            model: storageData.summaryModel,
-            input: text,
-            store: storageData.store,
-            max_output_tokens: storageData.maxOutputTokens
-        };
+        if (!storageData.summaryModel) {
+            throw new Error("Please select a summary model.");
+        }
+        body.model = storageData.summaryModel;
     } else if (isText) {
-        body = {
-            model: storageData.textModel,
-            input: text,
-            store: storageData.store,
-            max_output_tokens: storageData.maxOutputTokens
-        };
+        if (!storageData.textModel) {
+            throw new Error("Please select a text model.");
+        }
+        body.model = storageData.textModel;
+    } else if(image) {
+        if (!storageData.imageModel) {
+            throw new Error("Please select an image model.");
+        }
+
+        body.model = storageData.imageModel
+        body.input = [
+            {
+                role: "user",
+                content: [
+                    {
+                        type: "input_text",
+                        text: text
+                    },
+                    {
+                        type: "input_image",
+                        image_url: image
+                    }
+                ]
+            }
+        ];
     } else {
-        body = {
-            model: storageData.imageModel,
-            input: [
-                {
-                    role: "user",
-                    content: [
-                        {
-                            type: "input_text",
-                            text: text
-                        },
-                        {
-                            type: "input_image",
-                            image_url: image
-                        }
-                    ]
-                }
-            ],
-            store: storageData.store,
-            max_output_tokens: storageData.maxOutputTokens
-        };
+        throw new Error("Invalid request.");
     }
 
     if (storageData.store && previousId) {
@@ -246,10 +253,11 @@ async function loadTextFile(textFileUrl) {
 }
 
 /* ---------------- TEXT API ---------------- */
-async function askChatGPT(isText, apiKey, text, image, isSummary=false, domainOverride=null) {
+async function askChatGPT(isText, apiKey, text, image=null, isSummary=false, domainOverride=null) {
     const storageData = await getData();
     let domain = null;
     let previousId = null;
+
     if (storageData.store) {
         if (domainOverride) {
             domain = domainOverride;
@@ -265,13 +273,11 @@ async function askChatGPT(isText, apiKey, text, image, isSummary=false, domainOv
 
         if (storageData.conversations?.[domain]?.reset) {
             text = storageData.conversations?.[domain]?.summary + "\n\n" + text;
-            storageData.conversations[domain].reset = false;
-            storageData.conversations[domain].summary = null;
-            await chrome.storage.local.set({
-                conversations: storageData.conversations
-            });
         }
     }
+
+    const body = buildApiBody(isText, storageData, text, image, previousId, isSummary);
+
     const res = await fetch(
         "https://api.openai.com/v1/responses",
         {
@@ -282,50 +288,61 @@ async function askChatGPT(isText, apiKey, text, image, isSummary=false, domainOv
                 "Content-Type":
                     "application/json"
             },
-            body: JSON.stringify(apiBody(isText, storageData, text, image, previousId, isSummary))
+            body: JSON.stringify(body)
         }
     );
 
     const data = await res.json();
 
     if (!res.ok) {
+        // This error will be displayed in the answer textbox.
         throw new Error(
             data.error?.message ||
             "API request failed"
         );
     }
 
-    if (storageData.store && !isSummary) {
+    if (storageData.store) {
+        if (storageData.conversations?.[domain]?.reset) {
+            storageData.conversations[domain].reset = false;
+            storageData.conversations[domain].summary = null;
+            await chrome.storage.local.set({
+                conversations: storageData.conversations
+            });
+        }
+    }
+
+    if (!isSummary && storageData.store) {
         const oldCount = storageData.conversations?.[domain]?.count ?? 0;
         storageData.conversations[domain] = {
             id: data.id,
             count: oldCount + 1
         };
-        // console.log(`Num: ${storageData.conversations?.[domain]?.count ?? 0}`);
-        
-        if (storageData.summary && (storageData.conversations[domain].count >= storageData.summaryCount)) {
-            summarizeInBackground(storageData, domain);
-        }
-
         await chrome.storage.local.set({
             conversations: storageData.conversations
         });
     }
+
+
     return extractText(data);
 }
 
-async function summarizeInBackground(storageData, domain) {
+async function summarizeConversation(storageData, domain) {
     try {
         const { openaiApiKey } = await getData(["openaiApiKey"]);
 
         const summary = await askChatGPT(
-            true,
+            false,
             openaiApiKey,
             await loadTextFile("summary.txt"),
             null,
             true,
             domain
         );
+
+        if (summary == null) {
+            return;
+        }
 
         storageData.conversations[domain] = {
             id: null,
@@ -337,9 +354,6 @@ async function summarizeInBackground(storageData, domain) {
         await chrome.storage.local.set({
             conversations: storageData.conversations
         });
-        // console.log(`Summary answer: ${summary}`);
-        // console.log("Summary done");
-
     } catch (e) {
         console.error("Summary failed:", e);
     }
@@ -347,17 +361,12 @@ async function summarizeInBackground(storageData, domain) {
 
 /* ---------------- RESPONSE ---------------- */
 function extractText(data) {
-    return (
-        data.output_text ||
-        data.output?.[0]?.content
-            ?.find(
-                x =>
-                    x.type ===
-                    "output_text"
-            )
-            ?.text ||
-        "No response."
-    );
+    return data.output
+        ?.filter(item => item.type === "message")
+        .flatMap(item => item.content ?? [])
+        .filter(item => item.type === "output_text")
+        .map(item => item.text)
+        .join("\n") || "No response.";
 }
 
 /* ---------------- CROP UI ---------------- */
@@ -654,58 +663,138 @@ async function getData(keys=null) {
 }
 
 /* ---------------- UI ---------------- */
-function showAnswer(answer) {
+function createTextBox() {
+    let box = document.getElementById("clip-ask-ai-box");
+    if (!box) {
+        box = document.createElement("div");
+        box.id = "clip-ask-ai-box";
 
-    const old = document.getElementById("box");
-    if (old) old.remove();
+        box.style.position = "fixed";
+        box.style.left = "0";
+        box.style.right = "0";
+        box.style.bottom = "0";
+        box.style.maxHeight = "35vh";
+        box.style.overflowY = "auto";
+        box.style.padding = "20px";
+        box.style.boxSizing = "border-box";
+        box.style.zIndex = "2147483647";
+        box.style.background = "#111";
+        box.style.color = "#fff";
+        box.style.fontSize = "14px";
+        box.style.borderTop = "1px solid #333";
+        box.style.whiteSpace = "pre-wrap";
 
-    const oldSpacer = document.getElementById("box-spacer");
-    if (oldSpacer) oldSpacer.remove();
+        document.body.appendChild(box);
+    }
 
-    const box = document.createElement("div");
-    box.id = "box";
+    let spacer = document.getElementById("clip-ask-ai-box-spacer");
+    if (!spacer) {
+        spacer = document.createElement("div");
+        spacer.id = "clip-ask-ai-box-spacer";
+        document.body.appendChild(spacer);
+    }
 
-    box.style.position = "fixed";
-    box.style.left = "0";
-    box.style.right = "0";
-    box.style.bottom = "0";
-    box.style.maxHeight = "35vh";
-    box.style.overflowY = "auto";
-    box.style.padding = "20px";
-    box.style.boxSizing = "border-box";
-    box.style.zIndex = "2147483647";
-    box.style.background = "#111";
-    box.style.color = "#fff";
-    box.style.fontSize = "14px";
-    box.style.borderTop = "1px solid #333";
-    box.style.whiteSpace = "pre-wrap";
+    let closeBtn = document.getElementById("clip-ask-ai-closebtn");
+    if (!closeBtn) {
+        closeBtn = document.createElement("span");
+        closeBtn.id = "clip-ask-ai-closebtn";
+        closeBtn.innerHTML = "&times;";
+        closeBtn.style.float = "right";
+        closeBtn.style.fontSize = "52px";
+        closeBtn.style.cursor = "pointer";
+        closeBtn.style.color = "#ff4d4d";
 
-    const closeBtn = document.createElement("span");
-    closeBtn.innerHTML = "&times;";
-    closeBtn.style.float = "right";
-    closeBtn.style.fontSize = "52px";
-    closeBtn.style.cursor = "pointer";
-    closeBtn.style.color = "#ff4d4d";
+        box.appendChild(closeBtn);
 
-    const text = document.createElement("div");
-    text.innerHTML = DOMPurify.sanitize(marked.parse(answer));
+        closeBtn.onclick = function () {
+            box.remove();
+            spacer.remove();
+        };
+    }
 
-    box.appendChild(closeBtn);
-    box.appendChild(text);
-    document.body.appendChild(box);
-
-    const spacer = document.createElement("div");
-    spacer.id = "box-spacer";
-    document.body.appendChild(spacer);
-
+    //Match spacer height to the box height to prevent content overlap.
     requestAnimationFrame(() => {
         spacer.style.height = box.offsetHeight + "px";
     });
 
-    closeBtn.onclick = function () {
-        box.remove();
-        spacer.remove();
-    };
+    return box;
+}
+
+function loadingMessage(message) {
+    const box = document.getElementById("clip-ask-ai-box");
+    if (!box) return;
+    const text = document.getElementById("clip-ask-ai-text");
+    if (text) {
+        text.innerHTML = ``;
+    }
+    let container = document.getElementById("clip-ask-ai-loading");
+    if (!container) {
+        container = document.createElement("div");
+        container.id = "clip-ask-ai-loading";
+        container.style.display = "flex";
+        container.style.alignItems = "center";
+        container.style.gap = "12px";
+
+        box.appendChild(container);
+    }
+
+    let spinner = document.getElementById("clip-ask-ai-spinner");
+    if (!spinner) {
+        spinner = document.createElement("div");
+        spinner.className = "clip-ask-ai-spinner";
+        spinner.style.width = "32px";
+        spinner.style.height = "32px";
+        spinner.style.border = "4px solid rgba(255, 255, 255, 0.2)";
+        spinner.style.borderTopColor = "rgba(255, 255, 255, 0.5)";
+        spinner.style.borderRadius = "50%";
+        spinner.style.animation = "clip-ask-ai-spin 0.8s linear infinite";
+
+        container.appendChild(spinner);
+    }
+
+    // @keyframes
+    let style = document.getElementById("clip-ask-ai-spinner-style");
+    if (!style) {
+        style = document.createElement("style");
+        style.id = "clip-ask-ai-spinner-style";
+        style.textContent = `
+            @keyframes clip-ask-ai-spin {
+                to {
+                    transform: rotate(360deg);
+                }
+            }
+        `;
+        document.head.appendChild(style);
+    }
+
+    let loadingText = document.getElementById("clip-ask-ai-loading-text");
+    if (!loadingText) {
+        loadingText = document.createElement("div");
+        loadingText.id = "clip-ask-ai-loading-text";
+        loadingText.style.color = "rgba(255, 255, 255, 0.5)";
+        container.appendChild(loadingText);
+    }
+
+    loadingText.textContent = message;
+}
+
+function removeLoadingMessage() {
+    const loadingContainer = document.getElementById("clip-ask-ai-loading");
+    if (loadingContainer) loadingContainer.remove();
+}
+
+function showAnswer(answer) {
+    const box = document.getElementById("clip-ask-ai-box");
+    if (!box) return;
+
+    let text = document.getElementById("clip-ask-ai-text");
+    if (!text) {
+        text = document.createElement("div");
+        text.id = "clip-ask-ai-text"
+    }
+    text.innerHTML = DOMPurify.sanitize(marked.parse(answer));
+
+    box.appendChild(text);
 }
 
 async function inject(id) {

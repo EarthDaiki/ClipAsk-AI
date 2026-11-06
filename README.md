@@ -2,7 +2,7 @@
 
 A lightweight Chrome extension that lets you ask ChatGPT directly from any webpage by highlighting text or cropping an area of the screen.
 
-Version: `1.1.1`
+Version: `1.2.0`
 
 ---
 
@@ -30,7 +30,7 @@ Version: `1.1.1`
 ### Optional Summary Mode
 
 - Works when Chat Mode is enabled
-- Summarizes conversation history after a set number of messages
+- Summarizes conversation history before the next request after the configured message count is reached
 - Helps reduce token usage and API cost
 - Can be turned on or off in Advanced Settings
 
@@ -117,7 +117,11 @@ The Options page includes:
 - Summary Mode
 - Summary Frequency
 
-The extension fetches available models from the OpenAI API and internally filters the list before showing it in the model dropdowns. Models that are not useful for this extension, such as image generation, audio, realtime, transcription, or text-to-speech models, are not displayed. This helps users choose only models that can be used for highlighted text requests, cropped image analysis, and summarization.
+The extension fetches the models available to the supplied OpenAI API key. It first looks for the curated choices `gpt-6.1-sol` (Recommended), `gpt-6.1-terra` (Balanced), and `gpt-6-luna` (Budget). If none of those models are available, it falls back to available GPT-5 and GPT-6 models.
+
+No model is selected automatically. Text, image, and summary models are selected separately and stored locally.
+
+The initial max output token setting is `500`, and the initial summary frequency is `30` messages.
 
 All settings are stored locally in the browser using `chrome.storage.local`.
 
@@ -130,8 +134,9 @@ All settings are stored locally in the browser using `chrome.storage.local`.
 ```text
 Enter OpenAI API Key
 → Fetch available models from OpenAI API
-→ Filter out unsupported models such as image generation, audio, realtime, transcription, and text-to-speech models
-→ Show only usable models in the model dropdowns
+→ Prefer the curated Recommended, Balanced, and Budget models
+→ Fall back to available GPT-5 and GPT-6 models when none of the curated models are available
+→ Show the resulting choices in the model dropdowns
 → Use the selected model for text, cropped image, or summary requests
 ```
 
@@ -179,9 +184,10 @@ Website domain
 
 ```text
 Conversation reaches summary limit
-→ Generate summary
+→ Start the next text or image request
+→ Generate a summary before sending that request
 → Reset conversation ID
-→ Reuse summary as compact context
+→ Send the summary as compact context with the new request
 ```
 
 ---
@@ -249,10 +255,10 @@ chrome://extensions
 
 1. Open the extension Options page.
 2. Enter your OpenAI API Key.
-3. Select the models you want to use.
+3. Select the text and image models you want to use.
 4. Set the max output tokens.
 5. Choose whether to enable Chat Mode.
-6. If Chat Mode is enabled, optionally enable Summary Mode.
+6. If Chat Mode is enabled, optionally enable Summary Mode and select a summary model.
 7. Click Save Settings.
 
 ---
