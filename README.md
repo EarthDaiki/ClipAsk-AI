@@ -50,7 +50,7 @@ This extension uses Chrome Manifest V3.
 {
   "manifest_version": 3,
   "name": "ClipAsk: Highlight Text & Ask ChatGPT",
-  "version": "1.1.1",
+  "version": "1.2.0",
   "description": "Highlight or crop anything and ask AI instantly!"
 }
 ```
@@ -117,11 +117,19 @@ The Options page includes:
 - Summary Mode
 - Summary Frequency
 
-The extension fetches the models available to the supplied OpenAI API key. It first looks for the curated choices `gpt-6.1-sol` (Recommended), `gpt-6.1-terra` (Balanced), and `gpt-6-luna` (Budget). If none of those models are available, it falls back to available GPT-5 and GPT-6 models.
+The extension fetches the models available to the supplied OpenAI API key and shows curated choices in the following order:
+
+| Use | Model order |
+|---|---|
+| Text | `gpt-6-luna` (Recommended), `gpt-6.1-terra` (Balanced), `gpt-6.1-sol` (Advanced) |
+| Image | `gpt-6.1-terra` (Recommended), `gpt-6-luna` (Budget), `gpt-6.1-sol` (Advanced) |
+| Summary | `gpt-6-luna` (Recommended), `gpt-6.1-terra` (Balanced), `gpt-6.1-sol` (Advanced) |
+
+For each dropdown, if none of its curated models are available, the extension falls back to available GPT-5 and GPT-6 models.
 
 No model is selected automatically. Text, image, and summary models are selected separately and stored locally.
 
-The initial max output token setting is `500`, and the initial summary frequency is `30` messages.
+The initial settings are Chat Mode off, Summary Mode on, max output tokens set to `500`, and summary frequency set to `30` messages. Summary Mode only takes effect while Chat Mode is enabled.
 
 All settings are stored locally in the browser using `chrome.storage.local`.
 
@@ -134,8 +142,8 @@ All settings are stored locally in the browser using `chrome.storage.local`.
 ```text
 Enter OpenAI API Key
 → Fetch available models from OpenAI API
-→ Prefer the curated Recommended, Balanced, and Budget models
-→ Fall back to available GPT-5 and GPT-6 models when none of the curated models are available
+→ Show available curated models in the configured order for each use
+→ Fall back to available GPT-5 and GPT-6 models when no curated model is available
 → Show the resulting choices in the model dropdowns
 → Use the selected model for text, cropped image, or summary requests
 ```
@@ -255,11 +263,12 @@ chrome://extensions
 
 1. Open the extension Options page.
 2. Enter your OpenAI API Key.
-3. Select the text and image models you want to use.
-4. Set the max output tokens.
-5. Choose whether to enable Chat Mode.
-6. If Chat Mode is enabled, optionally enable Summary Mode and select a summary model.
-7. Click Save Settings.
+3. Click Save & Continue to validate the key and load available models.
+4. Select the text and image models you want to use.
+5. Set the max output tokens.
+6. Choose whether to enable Chat Mode.
+7. If Chat Mode is enabled, optionally configure Summary Mode, its frequency, and its model under Advanced Settings.
+8. Click Save Settings.
 
 ---
 
