@@ -269,3 +269,20 @@ button:hover {
     flex-shrink: 0;
     cursor: pointer;
 }
+
+.loading::after {
+    content: "";
+    display: inline-block;
+    width: 14px;
+    height: 14px;
+    border: 2px solid currentColor;
+    border-top-color: transparent;
+    border-radius: 50%;
+    animation: load-spin 0.7s linear infinite;
+}
+
+@keyframes load-spin {
+    to {
+        transform: rotate(360deg);
+    }
+}

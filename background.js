@@ -341,9 +341,9 @@ async function summarizeConversation(storageData, domain) {
         );
 
         if (summary == null) {
-            return;
+            throw new Error("Summary failed.");
         }
-
+        
         storageData.conversations[domain] = {
             id: null,
             count: 0,

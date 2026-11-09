@@ -11,17 +11,24 @@ document.addEventListener("DOMContentLoaded", async () => {
         "summaryCount",
     ]);
 
-    let models = [];
+    let textModels = [];
+    let imageModels = [];
+    let summaryModels = [];
 
     if (result.openaiApiKey) {
         document.getElementById("apiKey").value = result.openaiApiKey;
         document.getElementById("settingContainer").hidden = false;
-        models = await setModel(result.openaiApiKey);
-        handleAdvancedMenuBtn();
+        document.getElementById("saveBtn").hidden = false;
+        const models = await setModel(result.openaiApiKey);
+        if (models) {
+            ({ textModels, imageModels, summaryModels } = models);
+        }
     } else {
         createContinueBtn();
         handleApiKeyInput();
     }
+
+    handleAdvancedMenuBtn();
 
     if (result.extraPrompt) {
         document.getElementById("extraPrompt").value = result.extraPrompt;
@@ -29,7 +36,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 
     const textModel = document.getElementById("textModel");
     if (result.textModel) {
-        const exist = models.some(model => model.id === result.textModel);
+        const exist = textModels.some(model => model.id === result.textModel);
         if (exist) {
             textModel.value = result.textModel;
         } else {
@@ -41,7 +48,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 
     const imageModel = document.getElementById("imageModel");
     if (result.imageModel) {
-        const exist = models.some(model => model.id === result.imageModel);
+        const exist = imageModels.some(model => model.id === result.imageModel);
         if (exist) {
             imageModel.value = result.imageModel;
         }
@@ -51,7 +58,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 
     const summaryModel = document.getElementById("summaryModel");
     if (result.summaryModel) {
-        const exist = models.some(model => model.id === result.summaryModel);
+        const exist = summaryModels.some(model => model.id === result.summaryModel);
         if (exist) {
             summaryModel.value = result.summaryModel;
         }
@@ -128,6 +135,13 @@ document.addEventListener("DOMContentLoaded", async () => {
     });
 });
 
+document.addEventListener("wheel", event => {
+    if (event.target instanceof HTMLInputElement && event.target.matches('input[type="number"]')) {
+        event.target.blur();
+    }
+}, { capture: true }
+);
+
 function createContinueBtn() {
     const apiKeyContainer = document.getElementById("apiKeyContainer");
     const continueBtn = document.createElement("button");
@@ -152,16 +166,34 @@ function handleApiKeyInput() {
 }
 
 async function handleContinueClick() {
+    removeMessage();
+    const button = document.getElementById("continueBtn");
+    if (!button) return;
+    button.classList.add("loading");
+    button.disabled = true;
+    button.textContent = "";
     const apiKey = document.getElementById("apiKey").value.trim();
 
     const models = await setModel(apiKey);
-    if (models.length > 0) {
+    if (
+        models &&
+        models.textModels.length > 0 &&
+        models.imageModels.length > 0 &&
+        models.summaryModels.length > 0
+    ) {
         await chrome.storage.local.set({
             openaiApiKey: apiKey
         });
+        document.getElementById("settingContainer").hidden = false;
+        document.getElementById("saveBtn").hidden = false;
+        button.remove();
     } else {
-        setMessage("API Key is invalid.")
+        button.disabled = false;
+        setMessage("Models are undefined.");
     }
+
+    button.classList.remove("loading");
+    button.textContent = "Save & Continue";
 }
 
 function handleChatModeRadio() {
@@ -294,61 +326,84 @@ function setMessage(text) {
     p.textContent = text;
 }
 
-async function setModel(apiKey) {
-    const data = await getModels(apiKey);
-    if (!data) { return []; }
+function removeMessage() {
+    const message = document.getElementById("message");
+    message.hidden = true;
+    const p = message.querySelector("p");
+    p.textContent = "";
+}
 
-    document.getElementById("settingContainer").hidden = false;
-
-    const modelLabels = {
-        "gpt-6.1-sol": "Recommended",
-        "gpt-6.1-terra": "Balanced",
-        "gpt-6-luna": "Budget"
-    };
-
-    let models = data.data.filter(model =>
-        Object.hasOwn(modelLabels, model.id)
+function filterModels(data, modelLabels) {
+    const modelMap = new Map(
+        data.data.map(model => [model.id, model])
     );
+    let models = Object.keys(modelLabels).map(id => modelMap.get(id)).filter(Boolean);
+
     if (models.length === 0) {
         models = data.data.filter(model => 
             /^gpt-[56](\.|-|$)/.test(model.id)
         );
     }
 
+    return models;
+}
+
+function setModelOption(select, modelLabels, models) {
+    if (!select.value) {
+        const option = document.createElement("option");
+        option.value = "";
+        option.textContent = "Select a model";
+        option.disabled = true;
+        option.selected = true;
+        option.hidden = true;
+        select.appendChild(option);
+    }
+    for (const model of models) {
+        let textContent = `${model.id}`;
+        if (modelLabels[model.id]) {
+            textContent = `${model.id} - ${modelLabels[model.id]}`;
+        }
+        const option = document.createElement("option");
+        option.value = model.id;
+        option.textContent = textContent;
+        select.appendChild(option);
+    }
+}
+
+async function setModel(apiKey) {
+    const data = await getModels(apiKey);
+    if (!data) return null;
+
+    const modelLabels = {
+        text: {
+            "gpt-6-luna": "Recommended - Fast & Low Cost Q&A",
+            "gpt-6.1-terra": "Balanced - Better Writing & Reasoning",
+            "gpt-6.1-sol": "Advanced - Complex Reasoning & Coding"
+        },
+        image: {
+            "gpt-6.1-terra": "Recommended - Visual Understanding & Screenshots",
+            "gpt-6-luna": "Budget - Simple Image Questions",
+            "gpt-6.1-sol": "Advanced - Complex Visual Reasoning"
+        },
+        summary: {
+            "gpt-6-luna": "Recommended - Fast & Low Cost Summaries",
+            "gpt-6.1-terra": "Balanced - Clear & Detailed Summaries",
+            "gpt-6.1-sol": "Advanced - Complex Documents & Analysis"
+        }
+    };
+
+    const textModels = filterModels(data, modelLabels.text);
+    const imageModels = filterModels(data, modelLabels.image);
+    const summaryModels = filterModels(data, modelLabels.summary);
+
     const textModelSelect = document.getElementById("textModel");
     const imageModelSelect = document.getElementById("imageModel");
     const summaryModelSelect = document.getElementById("summaryModel");
-    const selects = [textModelSelect, imageModelSelect, summaryModelSelect];
-    for (const select of selects) {
-        if (!select.value) {
-            const option = document.createElement("option");
-            option.value = "";
-            option.textContent = "Select a model";
-            option.disabled = true;
-            option.selected = true;
-            option.hidden = true;
-            select.appendChild(option);
-        }
-        for (const model of models) {
-            let textContent = `${model.id}`;
-            if (modelLabels[model.id]) {
-                textContent = `${model.id} - ${modelLabels[model.id]}`;
-            }
-            const option = document.createElement("option");
-            option.value = model.id;
-            option.textContent = textContent;
-            select.appendChild(option);
-        }
-    }
+    setModelOption(textModelSelect, modelLabels.text, textModels);
+    setModelOption(imageModelSelect, modelLabels.image, imageModels);
+    setModelOption(summaryModelSelect, modelLabels.summary, summaryModels);
 
-    if (models.length > 0) {
-        const continueBtn = document.getElementById("continueBtn");
-        if (continueBtn) {
-            continueBtn.remove();
-        }
-    }
-
-    return models;
+    return { textModels, imageModels, summaryModels };
 }
 
 async function getModels(apiKey) {
@@ -360,8 +415,13 @@ async function getModels(apiKey) {
         });
 
         const data = await res.json();
-        if (res.status != 200) {
-            setMessage(data.error.message);
+        if (!res.ok) {
+            setMessage(
+                (typeof data.error === "string" ? data.error : data.error?.message)
+                || `HTTP ${res.status}`
+            );
+            console.log(`status: ${res.status}`);
+            console.log("data:", data);
             return;
         }
         return data
